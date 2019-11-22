@@ -195,9 +195,10 @@ int main(int argc, char **argv)
 	CDevice dev_master(0, aDeviceList[0].getUri(), aDeviceList[0].getName());
 
 	double k_master[] = { 518.4867555811269, 0, 301.2378554028732, 0, 517.9021815902831, 244.2168611511136, 0, 0, 1 };
-	double c_master[] = { 0.2969676497213135, -1.282267901212675, -0.004452857706333246, -0.004453468933053606, 2.014987980086707 };
+	//double c_master[] = { 0.2969676497213135, -1.282267901212675, -0.004452857706333246, -0.004453468933053606, 2.014987980086707 };
+	double c_master[] = { 0.2969676497213135, -1.282267901212675, -0.004452857706333246, -0.004453468933053606 };
 	dev_master.K = cv::Mat(3, 3, CV_64FC1, k_master);
-	dev_master.coeffs = cv::Mat(5, 1, CV_64FC1, c_master);
+	dev_master.coeffs = cv::Mat(1, 4, CV_64FC1, c_master);
 	dev_master.camParam.setParams(dev_master.K, dev_master.coeffs, cv::Size(640, 480));
 	//camera_matrix_color = cv::Mat(3, 3, CV_32F, &k_master);
 	//dist_coeffs_color = cv::Mat::zeros(5, 1, CV_32F);
@@ -210,9 +211,10 @@ int main(int argc, char **argv)
 	CDevice dev_sub(1, aDeviceList[1].getUri(), aDeviceList[1].getName());
 
 	double k_sub[] = { 521.5044785405424, 0, 325.6884223968248, 0, 522.9233149474519, 252.8945754365468, 0, 0, 1 };
-	double c_sub[] = { 0.2271155572064441, -0.7912825841629555, -0.005510686460386698, -0.006743974360193664, 0.908899981405665 };
+	//double c_sub[] = { 0.2271155572064441, -0.7912825841629555, -0.005510686460386698, -0.006743974360193664, 0.908899981405665 };
+	double c_sub[] = { 0.2271155572064441, -0.7912825841629555, -0.005510686460386698, -0.006743974360193664 };
 	dev_sub.K = cv::Mat(3, 3, CV_64FC1, k_sub);
-	dev_sub.coeffs = cv::Mat(5, 1, CV_64FC1, c_sub);
+	dev_sub.coeffs = cv::Mat(1, 4, CV_64FC1, c_sub);
 	dev_sub.camParam.setParams(dev_sub.K, dev_sub.coeffs, cv::Size(640, 480));
 
 	dic = aruco::Dictionary::load("ARUCO_MIP_36h12");

@@ -5,7 +5,6 @@
 #include <vector> 
 #include <map>
 
-
 // OpenCV
 #include <opencv2\core\core.hpp>
 #include <opencv2\highgui\highgui.hpp>
@@ -31,7 +30,7 @@ using namespace std;
 //using namespace cv;
 using namespace openni;
 using namespace Eigen;
-//using namespace sen;
+
 
 class CDevice {
 public:
@@ -44,7 +43,7 @@ public:
 	cv::Mat			K;
 	cv::Mat			coeffs;
 	aruco::CameraParameters camParam;
-	
+
 
 	CDevice(int idx, const char* uri, string deviceName)
 	{
@@ -92,7 +91,7 @@ aruco::Dictionary dic;
 aruco::MarkerDetector MDetector;
 std::map<int, aruco::MarkerPoseTracker> MTracker_master;
 std::map<int, aruco::MarkerPoseTracker> MTracker_sub;
-float MarkerSize = 0.1f;
+float MarkerSize = 0.16f;
 
 //cv::Mat camera_matrix_color;
 //cv::Mat dist_coeffs_color;
@@ -140,8 +139,8 @@ void drawAxis(cv::InputOutputArray _image, cv::InputArray _cameraMatrix, cv::Inp
 }
 
 //openni图像流转化成点云
-bool getCloudXYZCoordinate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_XYZRGB, 
-	openni::VideoFrameRef  colorFrame, 
+bool getCloudXYZCoordinate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_XYZRGB,
+	openni::VideoFrameRef  colorFrame,
 	openni::VideoFrameRef  depthFrame,
 	VideoStream *	depthStream) {
 
@@ -158,7 +157,7 @@ bool getCloudXYZCoordinate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_XYZRGB,
 			const openni::DepthPixel rDepth = pDepthArray[idx];
 			openni::CoordinateConverter::convertDepthToWorld(*depthStream, x, y, rDepth, &fx, &fy, &fz);
 			//是否需要反转？
-			fx = -fx;
+			fx = fx;
 			fy = fy;
 			cloud_XYZRGB->points[i].x = fx * fScale;
 			cloud_XYZRGB->points[i].y = fy * fScale;
@@ -261,7 +260,7 @@ int main(int argc, char **argv)
 
 	while (true)
 	{
-		if (dev_master.pColorStream->readFrame(&vf_color_master) == STATUS_OK && 
+		if (dev_master.pColorStream->readFrame(&vf_color_master) == STATUS_OK &&
 			dev_master.pDepthStream->readFrame(&vf_depth_master) == STATUS_OK &&
 			dev_sub.pColorStream->readFrame(&vf_color_sub) == STATUS_OK &&
 			dev_sub.pDepthStream->readFrame(&vf_depth_sub) == STATUS_OK)
@@ -297,7 +296,7 @@ int main(int argc, char **argv)
 					}
 				}
 
-				getCloudXYZCoordinate(cloud_XYZRGB_master,vf_color_master,vf_depth_master,dev_master.pDepthStream);
+				getCloudXYZCoordinate(cloud_XYZRGB_master, vf_color_master, vf_depth_master, dev_master.pDepthStream);
 				pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloud_XYZRGB_master);
 				viewer_master->addPointCloud<pcl::PointXYZRGB>(cloud_XYZRGB_master, rgb, "cloud_master");
 				viewer_master->spinOnce();
@@ -346,13 +345,19 @@ int main(int argc, char **argv)
 			//求转换矩阵-》转换点云-》叠加
 			if (poseEstimationOK_master && poseEstimationOK_sub)
 			{
+				//master->sub转换
+				cv::Vec3d rvec_master, tvec_master;
+				eigenTransform2cvRvecTvec(frame_master_marker, rvec_master, tvec_master);
+				drawAxis(cv_img_master, dev_master.K, dev_master.coeffs, rvec_master, tvec_master, 0.3f);
 				Eigen::Affine3d frame_master_sub = frame_master_marker * frame_sub_marker.inverse();
 
+				//sub->master转换
 				cv::Vec3d rvec, tvec;
 				eigenTransform2cvRvecTvec(frame_sub_marker, rvec, tvec);
-				drawAxis(cv_img_sub, dev_sub.K, dev_sub.coeffs, rvec, tvec, 0.5f);
-				//求rvec，tvec
+				drawAxis(cv_img_sub, dev_sub.K, dev_sub.coeffs, rvec, tvec, 0.3f);
 				Eigen::Affine3d frame_sub_master = frame_sub_marker * frame_master_marker.inverse();
+
+				//求rvec，tvec
 				eigenTransform2cvRvecTvec(frame_sub_master, rvec, tvec);
 				Eigen::Matrix4d frame_matrix = frame_sub_master.matrix();
 
@@ -365,23 +370,38 @@ int main(int argc, char **argv)
 				writeToCSVfile<double>("d:\\frame_sub_marker.csv", frame_matrix);
 				std::cout << "save matrix into csv file OK.\n";
 
-				drawAxis(cv_img_sub, dev_sub.K, dev_sub.coeffs, rvec, tvec, 0.5f);
-				//转换master点云
+				drawAxis(cv_img_sub, dev_sub.K, dev_sub.coeffs, rvec, tvec, 0.3f);
+
+				imshow("color master", cv_img_master);
+				imshow("color fusion", cv_img_sub);
+
+				//转换sub点云
 				pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_output(new pcl::PointCloud<pcl::PointXYZRGB>());
-				pcl::transformPointCloud(*cloud_XYZRGB_master, *cloud_output, frame_sub_master.matrix());
+				pcl::transformPointCloud(*cloud_XYZRGB_sub, *cloud_output, frame_sub_master.matrix());
 
 				//叠加显示
-				*cloud_output += *cloud_XYZRGB_sub;
+				*cloud_output += *cloud_XYZRGB_master;
 				pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloud_output);
 				viewer_fusion->addPointCloud<pcl::PointXYZRGB>(cloud_output, rgb, "cloud");
-				viewer_fusion->spinOnce();
+				viewer_fusion->spinOnce(20);
 				viewer_fusion->removeAllPointClouds();
+
+				////转换master点云
+				//pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_output(new pcl::PointCloud<pcl::PointXYZRGB>());
+				//pcl::transformPointCloud(*cloud_XYZRGB_master, *cloud_output, frame_sub_master.matrix());
+
+				////叠加显示到master
+				//*cloud_output += *cloud_XYZRGB_sub;
+				//pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloud_output);
+				//viewer_fusion->addPointCloud<pcl::PointXYZRGB>(cloud_output, rgb, "cloud");
+				//viewer_fusion->spinOnce();
+				//viewer_fusion->removeAllPointClouds();
 			}
 			else
 			{
 				std::cout << endl;
 			}
-			imshow("color sub", cv_img_sub);
+
 		}
 
 

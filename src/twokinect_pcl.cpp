@@ -1,9 +1,12 @@
 // 标准库头文件
+#include <stdio.h>
+#include <stdlib.h>
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <vector> 
 #include <map>
+#include "zlib.h"
 
 // OpenCV
 #include <opencv2\core\core.hpp>
@@ -25,6 +28,11 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
 #include <pcl/common/transforms.h>
+#include <pcl/compression/octree_pointcloud_compression.h>
+#include <pcl/visualization/cloud_viewer.h>
+#include <pcl/point_cloud.h>
+
+#include <hiredis.h>
 
 using namespace std;
 //using namespace cv;
@@ -172,10 +180,87 @@ bool getCloudXYZCoordinate(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_XYZRGB,
 
 }
 
+int gzcompress(Bytef *data, uLong ndata, Bytef *zdata, uLong *nzdata)
+{
+	z_stream c_stream;
+	int err = 0;
+
+	if (data && ndata > 0) {
+		c_stream.zalloc = NULL;
+		c_stream.zfree = NULL;
+		c_stream.opaque = NULL;
+
+		//只有设置为MAX_WBITS + 16才能在在压缩文本中带header和trailer
+		if (deflateInit2(&c_stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
+			MAX_WBITS + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+			return -1;
+		}
+			
+		c_stream.next_in = data;
+		c_stream.avail_in = ndata;
+		c_stream.next_out = zdata;
+		c_stream.avail_out = *nzdata;
+
+		while (c_stream.avail_in != 0 && c_stream.total_out < *nzdata) {
+
+			if (deflate(&c_stream, Z_NO_FLUSH) != Z_OK)
+				return -1;
+		}
+
+		if (c_stream.avail_in != 0) return c_stream.avail_in;
+
+		for (;;) {
+			if ((err = deflate(&c_stream, Z_FINISH)) == Z_STREAM_END) break;
+			if (err != Z_OK) return-1;
+		}
+
+		if (deflateEnd(&c_stream) != Z_OK)
+			return -1;
+
+		*nzdata = c_stream.total_out;
+		return 0;
+	}
+	return -1;
+
+}
+
+
+int gzDecompress(const char *src, int srcLen, const char *dst, int dstLen) {
+	z_stream strm;
+	strm.zalloc = NULL;
+	strm.zfree = NULL;
+	strm.opaque = NULL;
+
+	strm.avail_in = srcLen;
+	strm.avail_out = dstLen;
+	strm.next_in = (Bytef *)src;
+	strm.next_out = (Bytef *)dst;
+
+	int err = -1, ret = -1;
+	err = inflateInit2(&strm, MAX_WBITS + 16);
+	if (err == Z_OK) {
+		err = inflate(&strm, Z_FINISH);
+		if (err == Z_STREAM_END) {
+			ret = strm.total_out;
+		}
+		else {
+			inflateEnd(&strm);
+			return err;
+		}
+	}
+	else {
+		inflateEnd(&strm);
+		return err;
+	}
+	inflateEnd(&strm);
+	return err;
+}
+
 
 
 int main(int argc, char **argv)
 {
+	int c = 0;
 	OpenNI::initialize();
 
 	// 设备信息  
@@ -257,11 +342,16 @@ int main(int argc, char **argv)
 	viewer_sub->addCoordinateSystem(0.3);
 
 	pcl::visualization::PCLVisualizer::Ptr viewer_fusion(new pcl::visualization::PCLVisualizer("Viewer_fusion"));
-	viewer_fusion->setCameraPosition(0, 0, -2, 0, 1, 0, 0);
+	viewer_fusion->setCameraPosition(2, 0, 0, 0, 1, 0, 0);
 	viewer_fusion->addCoordinateSystem(0.3);
+
+
+	redisContext *ctx = redisConnect("192.168.155.127", 6379);
+
 
 	while (true)
 	{
+		c++;
 		if (dev_master.pColorStream->readFrame(&vf_color_master) == STATUS_OK &&
 			dev_master.pDepthStream->readFrame(&vf_depth_master) == STATUS_OK &&
 			dev_sub.pColorStream->readFrame(&vf_color_sub) == STATUS_OK &&
@@ -344,7 +434,7 @@ int main(int argc, char **argv)
 
 			}
 
-			//求转换矩阵-》转换点云-》叠加
+			//求转换矩阵-》点云变换-》叠加-》压缩-》zip-》写redis
 			if (poseEstimationOK_master && poseEstimationOK_sub)
 			{
 				//master->sub转换
@@ -381,28 +471,59 @@ int main(int argc, char **argv)
 				pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_output(new pcl::PointCloud<pcl::PointXYZRGB>());
 				pcl::transformPointCloud(*cloud_XYZRGB_sub, *cloud_output, frame_sub_master.matrix());
 
-				//叠加显示
+				//叠加
 				*cloud_output += *cloud_XYZRGB_master;
-				pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloud_output);
-				viewer_fusion->addPointCloud<pcl::PointXYZRGB>(cloud_output, rgb, "cloud");
+
+				// 配置文件，如果想看配置文件的详细内容，可以参考: /io/include/pcl/compression/compression_profiles.h
+				//pcl::io::compression_Profiles_e compressionProfile = pcl::io::MED_RES_ONLINE_COMPRESSION_WITH_COLOR;
+				pcl::io::compression_Profiles_e compressionProfile = pcl::io::MANUAL_CONFIGURATION;
+				// 初始化点云压缩器和解压器
+				pcl::io::OctreePointCloudCompression<pcl::PointXYZRGB>* PointCloudEncoder;
+				pcl::io::OctreePointCloudCompression<pcl::PointXYZRGB>*	PointCloudDecoder;
+				PointCloudEncoder = new pcl::io::OctreePointCloudCompression<pcl::PointXYZRGB>(compressionProfile, true, 0.001, 0.01, false, 30, true, 4);
+				//PointCloudEncoder = new pcl::io::OctreePointCloudCompression<pcl::PointXYZRGB>(compressionProfile, true);
+				PointCloudDecoder = new pcl::io::OctreePointCloudCompression<pcl::PointXYZRGB>();
+
+				// 压缩结果stringstream
+				std::stringstream compressedData;
+				// 输出点云
+				pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloudOut(new pcl::PointCloud<pcl::PointXYZRGB>());
+				// 压缩点云
+				PointCloudEncoder->encodePointCloud((*cloud_output).makeShared(), compressedData);
+				std::cout << compressedData.str() << std::endl;
+
+				//gzip
+				uLong size_src = compressedData.str().length();
+				printf("xyzrgbStr size: %d\n", size_src);
+				uLong size_compressed = size_src * 2;
+				unsigned char* xyzrgbStr_zip = (unsigned char *)malloc(size_compressed);
+				memset(xyzrgbStr_zip, 0, size_src * 2);
+				gzcompress((Byte *)compressedData.str().c_str(), size_src, (Byte *)xyzrgbStr_zip, &size_compressed);
+				printf("xyzrgbStr_zip size: %d\n", size_compressed);
+
+				//redis
+				redisCommand(ctx, "SET frame_%d %b", c%10, xyzrgbStr_zip, (size_t)size_compressed);
+				redisCommand(ctx, "SET last_frame frame_%d", c%10);
+				free(xyzrgbStr_zip);
+				
+				
+				// 解压点云
+				PointCloudDecoder->decodePointCloud(compressedData, cloudOut);
+				//显示
+				pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloudOut);
+				viewer_fusion->addPointCloud<pcl::PointXYZRGB>(cloudOut, rgb, "cloud");
 				viewer_fusion->spinOnce(20);
 				viewer_fusion->removeAllPointClouds();
 
-				////转换master点云
-				//pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_output(new pcl::PointCloud<pcl::PointXYZRGB>());
-				//pcl::transformPointCloud(*cloud_XYZRGB_master, *cloud_output, frame_sub_master.matrix());
+				delete PointCloudEncoder;
+				delete PointCloudDecoder;
 
-				////叠加显示到master
-				//*cloud_output += *cloud_XYZRGB_sub;
-				//pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloud_output);
-				//viewer_fusion->addPointCloud<pcl::PointXYZRGB>(cloud_output, rgb, "cloud");
-				//viewer_fusion->spinOnce();
-				//viewer_fusion->removeAllPointClouds();
 			}
 			else
 			{
 				std::cout << endl;
 			}
+
 
 		}
 
@@ -421,5 +542,6 @@ int main(int argc, char **argv)
 	}
 
 	OpenNI::shutdown();
+	redisFree(ctx);
 	return 0;
 }

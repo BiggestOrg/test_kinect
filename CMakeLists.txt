@@ -19,6 +19,16 @@ include_directories(${PCL_INCLUDE_DIRS})
 #find_package(Eigen REQUIRED)
 include_directories("C:\\Program Files\\PCL 1.9.0\\3rdParty\\Eigen\\eigen3")
 
+set(Redis_INCLUDE "D:\\redis-3.0\\deps\\hiredis")
+include_directories(${Redis_INCLUDE})
+set(Redis_LIB "D:\\redis-3.0\\msvs\\x64\\Debug")
+link_directories(${Redis_LIB})
+
+set(Zlib_INCLUDE "D:\\zlib-1.2.11")
+include_directories(${Zlib_INCLUDE})
+set(Zlib_LIB "D:\\zlib-1.2.11\\contrib\\vstudio\\vc14\\x64\\ZlibStatDebug")
+link_directories(${Zlib_LIB})
+
 # Find aruco. You have set the aruco_ROOT path with your environment.
 set(ArUco_ROOT "C:/Program Files/aruco")
 IF(NOT ArUco_ROOT)
@@ -44,7 +54,7 @@ add_executable (test_kinect_twokinect_calibration "src/twokinect_calibration.cpp
 target_link_libraries(test_kinect_twokinect_calibration ${OpenCV_LIBRARIES} ${ArUco_LIBRARIES} OpenNI2.lib)
 
 add_executable (test_kinect_twokinect_pcl "src/twokinect_pcl.cpp")
-target_link_libraries(test_kinect_twokinect_pcl ${OpenCV_LIBRARIES} ${ArUco_LIBRARIES} ${PCL_LIBRARIES} OpenNI2.lib)
+target_link_libraries(test_kinect_twokinect_pcl ${OpenCV_LIBRARIES} ${ArUco_LIBRARIES} ${PCL_LIBRARIES} OpenNI2.lib hiredis.lib Win32_Interop.lib zlibstat.lib)
 
 
 if(MSVC)
